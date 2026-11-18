@@ -21,7 +21,7 @@ OrderBook::OrderBook() : impl_(std::make_unique<Impl>()) {}
 OrderBook::~OrderBook() = default;
 
 std::vector<Event> OrderBook::process(const Command& command) {
-    // Until later roadmap steps implement these operations, fail explicitly rather
+    // Until these operations are implemented, fail explicitly rather
     // than emit a misleading business rejection or silently leave a crossed book.
     const auto* add = std::get_if<Add>(&command);
     if (!add) {

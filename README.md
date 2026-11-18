@@ -2,13 +2,12 @@
 
 A C++20 limit order book and matching engine portfolio project, developed on
 macOS. The focus is correctness, deterministic replay, and reproducible latency
-measurements. The 28-day roadmap is maintained locally in the ignored
-`requirements.txt`; the tracked contract describes the planned engine behavior.
+measurements.
 
-Days 1–3 provide field validation, non-crossing adds, FIFO storage, live ID lookup,
+The current implementation supports field validation, non-crossing adds, FIFO storage, live ID lookup,
 and best-price/depth queries. Tests cover price ordering, aggregates, rejection,
 and storage lifetimes. Crossing adds, cancellation, and replacement currently
-throw `std::logic_error` without changing the book; matching starts on Day 4.
+throw `std::logic_error` without changing the book. These operations are not yet implemented.
 The demo still validates a sample command.
 
 ## Build and test on macOS
@@ -43,14 +42,13 @@ ctest --test-dir build/sanitize --output-on-failure
 There are no external C++ dependencies. The library target is `order_book`, the
 demo is `order_book_demo`; test executables are `order_book_tests` (field contract)
 and `order_book_storage_tests` (book behavior and storage).
-Benchmarks arrive in Week 3; no latency claims have been measured yet.
+The benchmark harness is not yet implemented; no latency results are available.
 
 ## Repository-local compiler and editor setup
 
-LLVM/Clang 23.1.5 for macOS ARM64 is installed in `.tools/llvm/` and ignored by Git.
-This was the newest official macOS ARM64 binary available when installed;
-23.1.6 was the latest release but did not yet publish a macOS binary.
-Apple's compiler remains installed and can still build this project.
+The optional local compiler presets expect LLVM/Clang 23.1.5 for macOS ARM64
+in `.tools/llvm/`. Compiler binaries are not included in the repository.
+The standard build commands above use Apple Clang and do not need this download.
 
 Use the local compiler with these presets (CMake 3.21+):
 
@@ -66,8 +64,8 @@ Substitute `local-llvm-sanitize` for all three preset names to build/test with
 ASan and UBSan. Separate build directories avoid mixing compiler caches.
 The macOS SDK still comes from Apple's Command Line Tools.
 The toolchain file pairs local Clang with Apple SDK C++ headers and the system
-C++ runtime. The previously bundled LLVM runtimes aborted on exception-catching
-tests on this machine. When updating an existing local LLVM build, run
+C++ runtime. This keeps standard-library headers and runtime compatible for exception handling.
+When changing the toolchain of an existing local LLVM build, run
 `cmake --fresh --preset local-llvm` (and the sanitizer preset) once to clear the
 old linker settings. SDK discovery uses `xcrun`, so no SDK path is hard-coded.
 

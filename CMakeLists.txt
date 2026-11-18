@@ -28,7 +28,7 @@ target_include_directories(order_book PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/includ
 target_link_libraries(order_book PUBLIC order_book_options)
 set_target_properties(order_book PROPERTIES CXX_EXTENSIONS OFF)
 
-# This initial demo exercises the contract; replay arrives in days 10–11.
+# This demo exercises field validation; replay support is not yet implemented.
 add_executable(order_book_demo apps/demo.cpp)
 target_link_libraries(order_book_demo PRIVATE order_book)
 set_target_properties(order_book_demo PROPERTIES CXX_EXTENSIONS OFF)

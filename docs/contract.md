@@ -1,6 +1,6 @@
 # Engine contract
 
-This document specifies the target behavior. Through Day 3, non-crossing adds,
+This document specifies the target behavior. Non-crossing adds,
 field/duplicate/capacity rejection, event sequencing, and read-only queries are
 implemented. Crossing adds that pass validation, and all Cancel/Replace commands,
 currently throw `std::logic_error` without changing orders or consuming sequence

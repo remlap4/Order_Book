@@ -7,7 +7,7 @@ int main() {
     const order_book::Command command = order_book::Add{
         1, order_book::Side::buy, 100, 10};
     const auto error = order_book::validate_fields(command);
-    std::cout << "Order_Book: Day 1–2 contract demo (matching not implemented)\n"
+    std::cout << "Order_Book: field validation demo (matching not implemented)\n"
               << "Input validation: " << (error ? "invalid" : "valid") << '\n';
     return error ? 1 : 0;
 }
