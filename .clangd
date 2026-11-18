@@ -1,0 +1,4 @@
+# Match the local LLVM build; the fallback also covers files not yet in a target.
+CompileFlags:
+  CompilationDatabase: build/local-llvm
+  Add: [-std=c++20]

@@ -1,0 +1,363 @@
+ORDER_BOOK — PROJECT REQUIREMENTS AND DAILY ROADMAP
+=================================================
+Status: Days 01–02 complete; build setup and public contract ready. Day 03 is next.
+Created: 2026-11-17
+Repository: /Users/Palmer/Documents/Order_Book
+
+This is a plain-text project specification and roadmap, NOT a Python dependency
+file. Reading this file should provide enough context to resume the project.
+Keep requirements, progress, decisions, and measured results current here.
+
+1. PURPOSE AND CONSTRAINTS
+--------------------------
+Build a low-latency C++ in-memory limit order book and matching engine as a
+portfolio project for trading systems / quant developer roles. Demonstrate
+precise exchange-style semantics, data-structure tradeoffs, memory management,
+deterministic behavior, testing discipline, and honest performance measurement.
+
+Developer: intermediate C++ experience.
+Schedule: 28 work sessions over approximately four weeks, 1–2 hours per day
+(28–56 hours total). Day numbers are sequential sessions, not calendar deadlines.
+Primary development and measurement platform: macOS, on the developer's machine.
+Language/build: C++20 and CMake; repository-local LLVM/Clang 23.1.5 via the
+local-llvm presets. Apple Clang 17 remains a supported, verified alternative.
+Keep the core portable; Linux validation is optional and must not be claimed
+unless performed. Record actual compiler, CMake, OS, and hardware versions.
+Use the standard library for the core; keep external dependencies minimal.
+
+Portfolio story: implement a clear baseline, prove its behavior, profile it,
+make one evidence-based optimization, and explain the results and limitations.
+This is an educational simulator, not a production exchange or trading system.
+It has no broker connectivity, live trading, or real-money execution.
+
+2. REQUIRED SCOPE
+-----------------
+- One instrument, one order book, and one thread owning all mutable book state.
+- Buy and sell limit orders with good-till-cancelled (GTC) behavior.
+- Add, cancel, and replace commands; execution events and explicit rejections.
+- Price priority, then FIFO arrival priority within each price level.
+- Partial fills, multi-order matching, and sweeps across multiple price levels.
+- Best bid/ask, per-level aggregate quantity, and bounded depth snapshots.
+- Deterministic synthetic command generation and replay from a documented file.
+- Correctness tests, a simple reference model, and invariant validation.
+- A release-mode benchmark executable with reproducible workload definitions.
+- One measured optimization, architecture notes, results, and a runnable demo.
+
+Excluded from the four-week core: networking, GUI, concurrent matching, multiple
+instruments, market/IOC/FOK/stop/iceberg orders, auctions, fees, risk checks,
+persistence/recovery, real exchange feeds, and distributed deployment.
+These are stretch ideas only after the core acceptance criteria are met.
+
+3. MATCHING CONTRACT
+--------------------
+Numeric representation:
+- Use explicit integer types: uint64_t order IDs and quantities; int64_t prices
+  expressed in ticks. Prices, IDs, and submitted quantities must be positive.
+- Floating-point arithmetic must not determine price priority or matching.
+- Aggregate quantities and counters need checked bounds; overflow must never
+  silently wrap. Reject invalid input before changing book state.
+
+Add:
+- Reject invalid side, nonpositive price/quantity, and duplicate live order ID.
+- Match a buy while its limit >= best ask; match a sell while limit <= best bid.
+- Execute at the resting order's price, oldest order first at that price.
+- Emit one trade per resting-order fill with maker ID, taker ID, price, quantity,
+  and a deterministic event sequence number (no wall-clock dependency).
+- Remove fully filled resting orders and empty price levels immediately.
+- Rest any remaining incoming quantity at the back of its own price level.
+- IDs are unique among live orders; reuse after removal is allowed. Explain this
+  simplified identity rule in the public command-format documentation.
+
+Cancel:
+- Cancel the entire remaining quantity of a live order by ID.
+- Unknown or already removed IDs produce an explicit rejection and no mutation.
+
+Replace (intentionally simple portfolio semantics):
+- Supply the live ID, new limit price, and new remaining quantity; side is fixed.
+- Validate all fields and applicable bounds before removing the old order.
+- A valid replacement retains its ID but ALWAYS loses time priority, including
+  unchanged fields or a size reduction. It behaves as cancel plus a new add,
+  can immediately trade, and rests at the back if a remainder exists.
+- Unknown IDs or invalid replacements leave the original book unchanged.
+- This rule is a project choice, not a claim about all venues' amend policies.
+
+Observability and limits:
+- Define stable acknowledgement/rejection/trade event ordering and reason codes
+  before implementing replay. Logical input validation failures are recoverable.
+- Queries do not mutate state. Empty bid/ask must be represented explicitly.
+- Best-to-worst depth output contains price, total remaining quantity, order count.
+- Document resource limits and allocation-failure behavior. Do not claim recovery
+  from process-level allocation failure unless it is implemented and tested.
+- No self-trade prevention: participants/accounts are outside the model.
+
+4. ARCHITECTURE AND REPOSITORY SHAPE
+-----------------------------------
+Suggested layout (create incrementally):
+  CMakeLists.txt            build targets and compiler options
+  include/order_book/       public types and engine interface
+  src/                     book implementation
+  apps/                    command-line replay/demo
+  tests/                   unit, invariant, and differential tests
+  benchmarks/              workload generator and benchmark executable
+  data/                    small, deterministic replay examples
+  docs/                    architecture, command format, performance methodology
+  results/                 small benchmark summaries and environment metadata
+  README.md                quick start, project explanation, demo, results links
+  requirements.txt         this specification and daily progress record
+
+Baseline design:
+- Ordered price maps for each side, FIFO lists per level, and an order-ID lookup
+  holding stable handles into those lists. Track aggregate quantity per level.
+- Document iterator lifetime, ownership, and removal order. Avoid dangling handles.
+- Describe actual complexity: price lookup/insertion is O(log P), ID lookup is
+  expected O(1), and FIFO unlink is O(1); removing an empty price level may incur
+  additional work. A sweep also scales with the resting orders it fills.
+- Keep parsing, formatting, disk I/O, and console output outside the matching core.
+- Prefer a small concrete API to inheritance or framework scaffolding.
+- Start with readable standard containers; choose an optimization after profiling.
+  Candidate work includes reserving the ID index, recycling order storage, or
+  reducing allocations. Fixed-capacity designs require explicit exhaustion rules.
+
+Build targets: core library, replay/demo executable, test executable(s), benchmark.
+Use CTest as the test entry point. Enable warnings in development and support
+AddressSanitizer/UndefinedBehaviorSanitizer builds separately from benchmarks.
+Do not commit build products or large generated workloads.
+
+Code documentation requirement (applies throughout the project):
+- Comment overall logic, invariants, ownership/lifetime, and non-obvious decisions
+  in code. Explain why an algorithm or validation rule exists where useful.
+- Do not comment every line or paraphrase obvious syntax. Keep comments accurate
+  as implementation changes; document public behavior in the API and docs.
+- Apply the same standard to tests and build scripts when their logic needs context.
+
+5. CORRECTNESS AND PERFORMANCE ACCEPTANCE CRITERIA
+------------------------------------------------
+Correctness gate:
+- Tests cover FIFO, both sides, crossing/non-crossing orders, partial/full fills,
+  sweeps, empty-level cleanup, cancellation positions, replacement priority and
+  crossing behavior, invalid input, ID reuse, duplicates, and numeric boundaries.
+- Book invariants hold after each command in test runs: no crossed resting book;
+  no empty levels; positive live quantities; correct aggregate totals; consistent
+  side/price and ID index; each live order appears exactly once.
+- Quantity conservation is checked for fills and residuals; explicit cancellation
+  and replacement changes are accounted for separately.
+- Compare events and canonical book state against a deliberately simple independent
+  reference model over seeded randomized streams, including invalid commands.
+- Replay of identical input produces identical events and final state.
+- Tests pass in normal and supported sanitizer builds with no reported issues.
+
+Benchmark methodology:
+- Benchmark engine operations on pre-generated commands; exclude parsing, file I/O,
+  console output, and workload generation from timed regions. Consume/check results
+  so the compiler cannot discard the workload. Account for event emission costs.
+- Use a monotonic clock (e.g. std::chrono::steady_clock); report clock/timing overhead.
+  Separate per-command latency sampling from batched throughput measurements.
+- Report operation counts, throughput (commands/s), and p50/p95/p99/max latency in
+  ns/command. Explain that a command can generate several trades; also count fills.
+- Cover passive adds, cancels, replacements, aggressive matches, and multi-level
+  sweeps. Report per-operation latency as well as any mixed-workload summary.
+- Specify seed, command proportions, price distribution, initial live orders,
+  price levels, maximum occupancy, fill/rejection counts, and data-set size.
+- Include at least two book sizes (initial targets: 1,000 and 10,000 live orders).
+  Mixed steady-state workloads should replenish drained liquidity and report the
+  actual occupancy range; do not label an ever-growing book as steady state.
+- Warm up first; reset each measured run to the same initial state. Use at least
+  five measured repetitions, reporting variation and the quantile calculation.
+- Record commit/build identity, optimization flags, hardware/chip, macOS version,
+  compiler, power mode, and relevant background activity. Run without sanitizers.
+- macOS scheduling and timer noise limit conclusions; do not claim hard real-time
+  guarantees, nanosecond precision, Linux CPU pinning, or exchange-level latency.
+
+Performance goal:
+- Establish the baseline before setting an absolute latency target. No unsupported
+  sub-microsecond claim is required for project success.
+- Aim for >=10% improvement in median throughput or p99 latency on one preselected
+  workload, with unchanged correctness and disclosed effects on other workloads.
+  This is an experimental target, not a mandatory outcome: if the change does not
+  exceed run-to-run noise, report that and retain the clearer implementation.
+- Preserve comparable baseline/optimized results and explain the cost or tradeoff.
+
+6. DAILY ROADMAP (1–2 HOURS PER SESSION)
+----------------------------------------
+Each session: review the previous entry, implement the bounded task below, run
+relevant checks, and record completion/evidence in section 8. Mark [x] only when
+the day's deliverable exists. If work overruns, carry it forward and reduce stretch
+scope; never skip correctness or invent benchmark results to meet the timeline.
+
+Week 1 — Build a correct baseline
+[x] Day 01: Inspect the local compiler/CMake setup; create the library, demo, and
+    test targets plus .gitignore. Done: clean configure/build/CTest works on macOS.
+[x] Day 02: Define command/event types, rejection codes, event ordering, numeric
+    limits, and the engine API. Write tiny input/output examples for matching and
+    replacement. Done: contract is documented and public types compile.
+[ ] Day 03: Implement non-crossing add, price levels, FIFO storage, and ID lookup.
+    Done: tests prove ordering, duplicate rejection, and aggregate quantities.
+[ ] Day 04: Implement symmetric buy/sell matching and partial fills.
+    Done: tests prove maker-price execution and FIFO for both sides.
+[ ] Day 05: Add multi-level sweeps, full-fill cleanup, and residual resting.
+    Done: sweep tests assert exact trade sequence and final book state.
+[ ] Day 06: Implement cancellation, best bid/ask, and depth snapshots.
+    Done: cancel head/middle/tail/last order and query an empty book in tests.
+[ ] Day 07: Run sanitizers, add an invariant checker, and fix ownership/index bugs.
+    Done: week-one tests pass and the baseline design is briefly documented.
+
+Week 2 — Define edge cases and make replay trustworthy
+[ ] Day 08: Implement replacement with prevalidation and priority reset.
+    Done: tests cover crossing replacements and rejected replacements preserving state.
+[ ] Day 09: Harden numeric bounds, invalid fields, unknown IDs, and ID reuse.
+    Done: boundary tests exercise overflow handling and non-mutating rejection.
+[ ] Day 10: Specify a simple text replay format and implement its parser.
+    Done: valid commands parse; malformed lines report line numbers and stop replay
+    before executing that line. Engine-level rejections are emitted and replay continues.
+[ ] Day 11: Connect replay to the engine and deterministic event/depth output.
+    Done: a checked-in sample produces documented output and a repeatable final state.
+[ ] Day 12: Implement a slow, clear reference model using simple scans/containers.
+    Done: hand-written scenarios produce the same events and state as the core.
+[ ] Day 13: Add seeded randomized differential testing and invariant checks.
+    Done: thousands of commands across multiple seeds agree; failures print the seed
+    and shortest available failing input prefix for reproduction.
+[ ] Day 14: Run the full correctness/sanitizer suite and document edge semantics.
+    Done: all checks pass; replay demo and matching contract are consistent.
+
+Week 3 — Measure before optimizing
+[ ] Day 15: Build deterministic benchmark workloads and initial-book setup.
+    Done: each workload reports its seed, size, operation mix, and expected outcomes.
+[ ] Day 16: Implement warmup, repeated throughput runs, latency sampling, and output.
+    Done: the harness consumes results and reports timing overhead and quantiles.
+[ ] Day 17: Capture release baseline results at both planned book sizes.
+    Done: save small result files with build/environment metadata and variation.
+[ ] Day 18: Profile representative workloads using available macOS tooling (such
+    as Instruments) or targeted measurements. Done: document one supported bottleneck,
+    a specific optimization hypothesis, and the workload/metric selected in advance.
+[ ] Day 19: Implement one bounded optimization while keeping comparison possible.
+    Done: all correctness, differential, and sanitizer checks still pass.
+[ ] Day 20: Repeat identical baseline/optimized benchmark conditions.
+    Done: compare throughput and tail latency, disclose regressions and noisy results,
+    and decide whether to keep the optimization based on evidence.
+[ ] Day 21: Write the performance report and allocation/complexity tradeoffs.
+    Done: claims link to measurements; report methodology, limitations, and conclusions.
+
+Week 4 — Make the project easy to assess and reproduce
+[ ] Day 22: Review API/ownership and simplify code where it improves understanding.
+    Done: warning-clean build and documented lifetime/error guarantees; rerun affected tests.
+[ ] Day 23: Add an automated correctness workflow if repository hosting supports it,
+    or a local verification script otherwise. Done: a single documented entry point
+    configures, builds, and tests. Keep performance comparisons off shared CI runners.
+[ ] Day 24: Prepare a short demo showing FIFO, partial fill, sweep, cancel, replace,
+    and rejection. Done: checked-in inputs and expected outputs reproduce the walkthrough.
+[ ] Day 25: Write the architecture note with a small diagram, invariants, operation
+    complexity, and baseline/optimization rationale. Done: design is explainable unaided.
+[ ] Day 26: Rewrite README with purpose, macOS setup, exact build/test/replay/benchmark
+    commands, demo, measured results links, and explicit scope/limitations.
+    Done: someone unfamiliar with the project can follow it from a fresh checkout.
+[ ] Day 27: Rehearse the clean-checkout instructions; run full tests and sanitizers.
+    Fix documentation/build gaps. If benchmark-relevant code changed, rerun measurements.
+    Done: final verification evidence and the measured revision are recorded.
+[ ] Day 28: Audit every acceptance criterion and prepare a concise portfolio summary
+    and interview talking points. Done: deliverables are complete, limitations are
+    honest, results reproducible, and remaining ideas are listed as future work.
+
+7. FINAL DELIVERABLES AND SCOPE CONTROL
+---------------------------------------
+Required: working core, replay CLI and sample data, automated correctness tests,
+reference-model comparison, benchmark harness, reproducible results, architecture
+and performance notes, and a README that enables a new reader to run the project.
+
+Completion checklist:
+[ ] Matching contract and all required operations implemented.
+[ ] Correctness, differential, and sanitizer gates pass.
+[ ] Deterministic demo/replay works from documented commands.
+[ ] Baseline and optimization experiment are reproducible and honestly reported.
+[ ] Clean build/run walkthrough verified on macOS.
+[ ] Portfolio narrative explains design, measurements, and limits.
+
+If behind schedule: use day 22 and day 23 as catch-up sessions; keep the code
+review minimal and prefer a local verification script over CI setup. Reduce the
+optimization to a small measurable experiment. Move optional visuals, extra
+workloads, and extensions to the backlog; retain all core correctness gates.
+
+Optional future work: Linux measurements, bounded memory pools, alternative price
+indexes, multiple instruments, feed adapters, networking, concurrency outside the
+matching thread, persistent event logs, and a visualization consuming replay output.
+Each requires its own contract and measurements before claims are expanded.
+
+8. LIVING CONTEXT AND PROGRESS
+------------------------------
+Agreed decisions:
+- 2026-11-17: Intermediate C++; 1–2 hours/day; four-week portfolio project aimed
+  at trading systems / quant developer roles; macOS development.
+- Initial scope: single-threaded in-memory engine, replay, correctness tests, and
+  latency benchmarks. Networking and UI deferred.
+- Planning defaults: C++20/CMake, single instrument, GTC limits, integer ticks,
+  explicit replace semantics, standard-container baseline, measurement-led optimization.
+
+Current position: Days 01–02 complete; Day 03 (non-crossing add/storage) is next.
+Known blockers: none. CMake is installed in ignored .tools/cmake-venv; put its bin
+directory on PATH as documented in README.md.
+Measured performance: none yet. Do not present targets as measured results.
+
+2026-11-17 / Day 01:
+  Completed: CMakeLists.txt, .gitignore, core library, validation demo, CTest
+  targets, optional ASan/UBSan configuration, and README build instructions.
+  Local environment: macOS 15.7.9 (24G830), arm64, Apple Clang 17.0.0
+  (clang-1700.0.13.5), CMake 4.4.5. SDK supplied by Apple Command Line Tools.
+  Exact chip model was unavailable through sandboxed sysctl; record it before
+  performance measurements. No benchmark environment is claimed yet.
+  Verification (using .tools/cmake-venv/bin on PATH):
+    cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/debug --parallel
+    ctest --test-dir build/debug --output-on-failure
+    ./build/debug/order_book_demo
+  Outcome: fresh configure/build succeeded without compiler warnings; 2/2 CTest
+  tests passed; demo printed valid input and explicitly identified scaffold status.
+  Sanitizer verification:
+    cmake -S . -B build/sanitize -DCMAKE_BUILD_TYPE=Debug -DORDER_BOOK_SANITIZERS=ON
+    cmake --build build/sanitize --parallel
+    ctest --test-dir build/sanitize --output-on-failure
+  Outcome: build succeeded; 2/2 tests passed, no sanitizer reports.
+  Artifacts: ignored build/debug and build/sanitize; test logs under each
+  Testing/Temporary/LastTest.log. No commit created by this session.
+
+2026-11-17 / Day 02:
+  Completed: include/order_book/types.hpp and order_book.hpp; src/validation.cpp;
+  tests/contract_tests.cpp; docs/contract.md with matching/replacement examples.
+  Verification: normal and sanitizer builds above compile the public API and
+  check field boundaries/error precedence (17 runtime cases) plus demo smoke test.
+  Decisions: prices and individual quantities capped at 10^12; live orders capped
+  at 1,000,000, bounding aggregate quantity at 10^18. Capacity is checked before
+  matching new adds. Event sequence includes acknowledgements and rejections;
+  exhaustion throws before mutation using a conservative per-command reservation.
+  See docs/contract.md for complete ordering and allocation-failure semantics.
+  Engine class is declaration-only until Day 03; matching examples are specified
+  expected behavior, not claims of implemented matching. Field validation works.
+  Added user's standing requirement to comment overall code logic above.
+  Next: define engine storage/ownership and implement non-crossing add and tests.
+
+2026-11-17 / Local compiler and editor configuration:
+  User reported std::is_same_v missing and requested a current local compiler.
+  Apple Clang 17 accepts it in C++20; reproduced the missing-member error in
+  C++14. The reported editor/command configuration is the likely cause, not age
+  of the installed compiler; the user's editor diagnostic was not directly observed.
+  Installed official LLVM/Clang 23.1.5 macOS ARM64 in ignored .tools/llvm after
+  verifying the archive SHA-256 against official GitHub release metadata.
+  Latest release 23.1.6 had no macOS binary; 23.1.5 was the newest available
+  official macOS ARM64 binary at installation. Metadata/archive remain in .tools.
+  Added CMakePresets.json (local-llvm and local-llvm-sanitize), compile database
+  export, .vscode/c_cpp_properties.json, and .clangd to select C++20 consistently.
+  Local presets link bundled libc++/libc++abi/libunwind with a matching runtime
+  search path; Apple SDK still supplies system headers/libraries. README explains
+  commands, installation provenance, and editor reload steps.
+  Verification: configure/build/CTest succeeded for both local LLVM presets,
+  2/2 tests each, without compiler/linker warnings or sanitizer findings in the
+  final runs. No matching implementation or roadmap scope changed; Day 03 is next.
+
+Append one compact entry per completed session:
+  Date / day:
+  Completed and changed files:
+  Verification commands and outcomes:
+  Results/artifact paths (and revision when relevant):
+  Decisions, deviations, or blockers:
+  Next actionable step:
+
+When scope or semantics change, update the relevant section above as well as this
+log so future work does not rely on contradictory historical notes.

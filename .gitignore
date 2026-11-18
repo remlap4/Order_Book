@@ -1,0 +1,5 @@
+# Local tools, generated build trees, and macOS metadata.
+/.tools/
+/build/
+/build-*/
+.DS_Store
