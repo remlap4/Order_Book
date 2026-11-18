@@ -6,7 +6,7 @@
 
 namespace order_book {
 
-// Day 2 interface declaration. Definitions and storage arrive starting on Day 3.
+// Supports non-crossing adds and read-only queries; matching arrives next.
 // One thread owns the book. There is no internal synchronization or reentrancy.
 class OrderBook {
 public:
@@ -18,7 +18,8 @@ public:
     OrderBook& operator=(OrderBook&&) = delete;
 
     // Process synchronously and return owned events. Logical rejection preserves
-    // orders but advances the event sequence. See docs/contract.md for exceptions.
+    // orders but advances the event sequence. Crossing adds, Cancel and Replace
+    // currently throw std::logic_error without mutation. See docs/contract.md.
     [[nodiscard]] std::vector<Event> process(const Command& command);
 
     [[nodiscard]] std::optional<Level> best_bid() const;

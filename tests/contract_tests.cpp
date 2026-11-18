@@ -7,7 +7,7 @@
 
 using namespace order_book;
 
-// Compile the future API without linking unimplemented engine operations.
+// Check the public API signatures independently of runtime behavior tests.
 static_assert(std::is_same_v<decltype(std::declval<OrderBook&>().process(
     std::declval<const Command&>())), std::vector<Event>>);
 static_assert(std::is_same_v<decltype(std::declval<const OrderBook&>().best_bid()),

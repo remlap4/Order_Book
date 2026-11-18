@@ -1,6 +1,10 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "local-llvm",
@@ -9,36 +13,45 @@
       "binaryDir": "${sourceDir}/build/local-llvm",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_COMPILER": "${sourceDir}/.tools/llvm/bin/clang++",
-        "CMAKE_EXE_LINKER_FLAGS": "-L\"${sourceDir}/.tools/llvm/lib\"",
-        "CMAKE_BUILD_RPATH": "${sourceDir}/.tools/llvm/lib",
-        "CMAKE_CXX_STANDARD_LIBRARIES": "-lc++abi -lunwind",
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_STANDARD_REQUIRED": "ON",
         "CMAKE_CXX_EXTENSIONS": "OFF"
-      }
+      },
+      "toolchainFile": "${sourceDir}/cmake/macos-local-llvm.cmake"
     },
     {
       "name": "local-llvm-sanitize",
       "inherits": "local-llvm",
       "binaryDir": "${sourceDir}/build/local-llvm-sanitize",
-      "cacheVariables": { "ORDER_BOOK_SANITIZERS": "ON" }
+      "cacheVariables": {
+        "ORDER_BOOK_SANITIZERS": "ON"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "local-llvm", "configurePreset": "local-llvm" },
-    { "name": "local-llvm-sanitize", "configurePreset": "local-llvm-sanitize" }
+    {
+      "name": "local-llvm",
+      "configurePreset": "local-llvm"
+    },
+    {
+      "name": "local-llvm-sanitize",
+      "configurePreset": "local-llvm-sanitize"
+    }
   ],
   "testPresets": [
     {
       "name": "local-llvm",
       "configurePreset": "local-llvm",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "local-llvm-sanitize",
       "configurePreset": "local-llvm-sanitize",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

@@ -2,11 +2,14 @@
 
 A C++20 limit order book and matching engine portfolio project, developed on
 macOS. The focus is correctness, deterministic replay, and reproducible latency
-measurements. See [requirements.txt](requirements.txt) for the full 28-day roadmap.
+measurements. The 28-day roadmap is maintained locally in the ignored
+`requirements.txt`; the tracked contract describes the planned engine behavior.
 
-Days 1–2 provide a buildable core library with field validation, public command
-and event types, an engine interface declaration, and tests. Matching and the
-engine methods are not implemented yet. The demo validates a sample command.
+Days 1–3 provide field validation, non-crossing adds, FIFO storage, live ID lookup,
+and best-price/depth queries. Tests cover price ordering, aggregates, rejection,
+and storage lifetimes. Crossing adds, cancellation, and replacement currently
+throw `std::logic_error` without changing the book; matching starts on Day 4.
+The demo still validates a sample command.
 
 ## Build and test on macOS
 
@@ -38,7 +41,8 @@ ctest --test-dir build/sanitize --output-on-failure
 ```
 
 There are no external C++ dependencies. The library target is `order_book`, the
-demo is `order_book_demo`, and the test executable is `order_book_tests`.
+demo is `order_book_demo`; test executables are `order_book_tests` (field contract)
+and `order_book_storage_tests` (book behavior and storage).
 Benchmarks arrive in Week 3; no latency claims have been measured yet.
 
 ## Repository-local compiler and editor setup
@@ -61,9 +65,11 @@ ctest --preset local-llvm
 Substitute `local-llvm-sanitize` for all three preset names to build/test with
 ASan and UBSan. Separate build directories avoid mixing compiler caches.
 The macOS SDK still comes from Apple's Command Line Tools.
-The presets link LLVM's bundled libc++, libc++abi, and libunwind and set a runtime
-search path to `.tools/llvm/lib`; this keeps headers and runtime versions aligned.
-Keep that local directory available when running these build outputs.
+The toolchain file pairs local Clang with Apple SDK C++ headers and the system
+C++ runtime. The previously bundled LLVM runtimes aborted on exception-catching
+tests on this machine. When updating an existing local LLVM build, run
+`cmake --fresh --preset local-llvm` (and the sanitizer preset) once to clear the
+old linker settings. SDK discovery uses `xcrun`, so no SDK path is hard-coded.
 
 `std::is_same_v` needs `<type_traits>` and C++17 or newer. Apple Clang 17 already
 supports it; this project uses C++20. A missing-member editor diagnostic can mean

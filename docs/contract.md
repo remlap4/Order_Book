@@ -1,8 +1,21 @@
-# Engine contract (Day 2)
+# Engine contract
 
-This document specifies the engine to be implemented starting on Day 3. Currently
-the public types, field validator, build, tests, and validation demo work. The
-`OrderBook` class is a declaration only; its operations cannot yet be linked.
+This document specifies the target behavior. Through Day 3, non-crossing adds,
+field/duplicate/capacity rejection, event sequencing, and read-only queries are
+implemented. Crossing adds that pass validation, and all Cancel/Replace commands,
+currently throw `std::logic_error` without changing orders or consuming sequence
+numbers. This is a temporary development guard, not a venue rejection policy.
+Matching/cancellation/replacement examples below describe future behavior.
+
+Storage uses ascending price maps (bids traversed in reverse), FIFO lists per
+level, and an unordered ID index holding side, price, and stable list iterators.
+Map insertions and ID-index rehashing preserve list iterators. When removal is
+implemented, erase the ID entry before its list node and then any empty level.
+Insertion costs O(log P) plus expected O(1) ID indexing; best-price queries are
+O(1), and depth copies O(min(n, bid levels) + min(n, ask levels)) entries.
+Aggregate quantity cannot exceed 10^18 under the enforced count/quantity limits.
+Internal storage tests inspect FIFO before trades are available; execution FIFO
+will be tested through emitted trades once matching is implemented.
 
 ## Commands and limits
 
