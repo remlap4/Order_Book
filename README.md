@@ -4,10 +4,12 @@ A C++20 limit order book and matching engine portfolio project, developed on
 macOS. The focus is correctness, deterministic replay, and reproducible latency
 measurements.
 
-The current implementation supports field validation, non-crossing adds, FIFO storage, live ID lookup,
-and best-price/depth queries. Tests cover price ordering, aggregates, rejection,
-and storage lifetimes. Crossing adds, cancellation, and replacement currently
-throw `std::logic_error` without changing the book. These operations are not yet implemented.
+The current implementation supports limit adds with symmetric buy/sell matching,
+maker-price execution, FIFO priority, partial fills, live ID lookup, and
+best-price/depth queries. Tests cover matching at one price level on both sides,
+price ordering, aggregates, rejection, and storage lifetimes. Multi-level sweep
+and residual-resting edge cases are not yet covered by tests. Cancellation and
+replacement currently throw `std::logic_error` without changing the book.
 The demo still validates a sample command.
 
 ## Build and test on macOS

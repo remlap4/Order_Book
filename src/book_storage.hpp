@@ -28,7 +28,7 @@ struct OrderHandle {
 // Internal storage shared with storage tests, not part of the public API.
 // Both maps ascend; bids are traversed in reverse for best-price priority.
 // Lists own orders. Their iterators survive map insertion and hash rehashing.
-// Future removal must erase the ID handle before its list node/empty price level.
+// Removal must erase the ID handle before its list node/empty price level.
 struct BookStorage {
     std::map<Price, PriceLevel> bids;
     std::map<Price, PriceLevel> asks;

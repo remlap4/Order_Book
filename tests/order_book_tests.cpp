@@ -85,8 +85,6 @@ void unsupported_operations() {
     accepted(book, {1, Side::buy, 100, 2}, 1);
     accepted(book, {2, Side::sell, 102, 3}, 2);
     for (const Command& command : std::vector<Command>{
-             Add{3, Side::buy, 102, 1}, Add{3, Side::buy, 103, 1},
-             Add{3, Side::sell, 100, 1}, Add{3, Side::sell, 99, 1},
              Cancel{1}, Replace{1, 99, 1}}) {
         bool threw = false;
         try { (void)book.process(command); }
@@ -99,9 +97,69 @@ void unsupported_operations() {
     accepted(book, {3, Side::buy, 101, 1}, 3); // guards consume no sequence or ID
 }
 
+void check_trade(const Event& event, Sequence sequence, OrderId maker,
+                 OrderId taker, Price price, Quantity quantity) {
+    const auto* trade = std::get_if<Trade>(&event.payload);
+    require(event.sequence == sequence && trade && trade->maker_id == maker
+            && trade->taker_id == taker && trade->price == price
+            && trade->quantity == quantity, "trade sequence/payload");
+}
+
+void symmetric_matching() {
+    // Mirror each scenario and exercise both equality and strictly crossing
+    // limits. Nonmonotonic IDs distinguish FIFO arrival from numeric ID order.
+    for (const auto maker_side : {Side::buy, Side::sell}) {
+        for (const bool equal_limit : {false, true}) {
+            OrderBook book;
+            const auto taker_side = maker_side == Side::buy ? Side::sell : Side::buy;
+            const Price limit = equal_limit ? 100 : (taker_side == Side::buy ? 101 : 99);
+            accepted(book, {90, maker_side, 100, 5}, 1);
+            accepted(book, {10, maker_side, 100, 4}, 2);
+
+            // Rejected crossing commands must not fill or disturb priority.
+            rejected(book, {90, taker_side, limit, 7}, RejectReason::duplicate_id, 3);
+            rejected(book, {30, taker_side, limit, 0}, RejectReason::invalid_quantity, 4);
+            const auto first = book.process(Add{30, taker_side, limit, 2});
+            require(first.size() == 2 && first[0].sequence == 5, "partial fill events");
+            const auto* ack = std::get_if<Accepted>(&first[0].payload);
+            require(ack && ack->kind == CommandKind::add && ack->id == 30,
+                    "acceptance precedes trades");
+            check_trade(first[1], 6, 90, 30, 100, 2);
+            check_level((maker_side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        100, 7, 2);
+            require(book.live_order_count() == 2, "fully executed taker must not rest");
+            require(!(taker_side == Side::buy ? book.best_bid() : book.best_ask()),
+                    "taker side remains empty");
+
+            // Reusing the filled taker's ID is allowed. The partially filled
+            // maker must still execute before the second arrival.
+            const auto second = book.process(Add{30, taker_side, limit, 5});
+            require(second.size() == 3 && second[0].sequence == 7, "FIFO event count");
+            const auto* second_ack = std::get_if<Accepted>(&second[0].payload);
+            require(second_ack && second_ack->id == 30
+                    && second_ack->kind == CommandKind::add, "FIFO acknowledgement");
+            check_trade(second[1], 8, 90, 30, 100, 3);
+            check_trade(second[2], 9, 10, 30, 100, 2);
+            check_level((maker_side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        100, 2, 1);
+            require(book.live_order_count() == 1, "full maker removal");
+            // Nine submitted maker units = seven traded + two remaining.
+            const auto final = book.process(Add{40, taker_side, limit, 2});
+            require(final.size() == 2 && final[0].sequence == 10, "exact fill events");
+            check_trade(final[1], 11, 10, 40, 100, 2);
+            require(!book.best_bid() && !book.best_ask() && book.live_order_count() == 0,
+                    "exact fill removes final order and level");
+            accepted(book, {90, maker_side, 100, 1}, 12);
+            check_level((maker_side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        100, 1, 1);
+            check_trade(first[1], 6, 90, 30, 100, 2); // returned events own their data
+        }
+    }
+}
+
 void fifo_and_handles() {
     // Inspect internal storage because aggregate public queries intentionally hide
-    // individual IDs. Matching tests will later verify FIFO through trade events.
+    // individual IDs. Trade tests independently verify execution FIFO.
     detail::BookStorage storage;
     for (const auto side : {Side::buy, Side::sell}) {
         const OrderId offset = side == Side::buy ? 0 : 100;
@@ -138,6 +196,7 @@ int main() {
         add_and_query();
         invalid_adds();
         unsupported_operations();
+        symmetric_matching();
         fifo_and_handles();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

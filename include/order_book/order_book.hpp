@@ -6,7 +6,7 @@
 
 namespace order_book {
 
-// Supports non-crossing adds and read-only queries; matching arrives next.
+// Supports limit adds with price/FIFO matching and read-only queries.
 // One thread owns the book. There is no internal synchronization or reentrancy.
 class OrderBook {
 public:
@@ -18,7 +18,7 @@ public:
     OrderBook& operator=(OrderBook&&) = delete;
 
     // Process synchronously and return owned events. Logical rejection preserves
-    // orders but advances the event sequence. Crossing adds, Cancel and Replace
+    // orders but advances the event sequence. Cancel and Replace
     // currently throw std::logic_error without mutation. See docs/contract.md.
     [[nodiscard]] std::vector<Event> process(const Command& command);
 
