@@ -1,95 +1,48 @@
-# Order_Book
+# Order Book
 
-A C++20 limit order book and matching engine portfolio project, developed on
-macOS. The focus is correctness, deterministic replay, and reproducible latency
-measurements.
+A C++20 limit order book and matching engine focused on correctness,
+predictable behavior, and measurable performance.
 
-The current implementation supports limit adds with symmetric buy/sell matching,
-maker-price execution, FIFO priority, partial fills, live ID lookup, and
-best-price/depth queries. Tests cover matching at one price level on both sides,
-price ordering, aggregates, rejection, and storage lifetimes. Multi-level sweep
-and residual-resting edge cases are not yet covered by tests. Cancellation and
-replacement currently throw `std::logic_error` without changing the book.
-The demo still validates a sample command.
+The project explores the core mechanics of exchange-style order matching:
+price-time priority, order lifecycle management, and efficient in-memory
+storage. Performance improvements will be evaluated against a tested baseline
+using reproducible workloads.
 
-## Build and test on macOS
+## Scope
 
-Requires Apple Clang with C++20 support, the Command Line Tools SDK, and CMake
-3.20 or newer. If CMake is already on PATH, skip the local installation below.
-Otherwise Python 3 can install an isolated copy inside the ignored `.tools/`:
+- Single-instrument, single-threaded matching engine
+- Limit orders with price-time priority
+- Order cancellation and replacement
+- Partial fills and matching across price levels
+- Deterministic replay and correctness testing
+- Latency and throughput benchmarks
 
-```sh
-python3 -m venv .tools/cmake-venv
-.tools/cmake-venv/bin/python -m pip install cmake
-export PATH="$PWD/.tools/cmake-venv/bin:$PATH"
-```
+Networking, live trading, and a graphical interface are outside the core scope.
 
-From the repository root:
+## Current Progress
 
-```sh
-cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/debug --parallel
-ctest --test-dir build/debug --output-on-failure
-./build/debug/order_book_demo
-```
+Implemented:
 
-For AddressSanitizer and UndefinedBehaviorSanitizer:
+- Input validation and duplicate-order rejection
+- Buy/sell matching with maker-price execution and partial fills
+- FIFO storage within ordered price levels
+- Order-ID lookup, best bid/ask, and depth snapshots
 
-```sh
-cmake -S . -B build/sanitize -DCMAKE_BUILD_TYPE=Debug -DORDER_BOOK_SANITIZERS=ON
-cmake --build build/sanitize --parallel
-ctest --test-dir build/sanitize --output-on-failure
-```
+Tests cover matching at one price level on both sides, FIFO priority, aggregate
+quantities, rejection behavior, and storage lifetime. Multi-level sweep and
+residual-resting edge cases still need dedicated verification.
 
-There are no external C++ dependencies. The library target is `order_book`, the
-demo is `order_book_demo`; test executables are `order_book_tests` (field contract)
-and `order_book_storage_tests` (book behavior and storage).
-The benchmark harness is not yet implemented; no latency results are available.
+Cancellation, replacement, replay, and benchmarking are not yet implemented.
+No performance results are claimed yet.
 
-## Repository-local compiler and editor setup
+## Design
 
-The optional local compiler presets expect LLVM/Clang 23.1.5 for macOS ARM64
-in `.tools/llvm/`. Compiler binaries are not included in the repository.
-The standard build commands above use Apple Clang and do not need this download.
+The baseline uses ordered price maps, FIFO lists at each price level, and
+a hash index for order lookup. Prices and quantities use integer types,
+and one thread owns all mutable book state. Normal and sanitizer builds
+verify the implementation.
 
-Use the local compiler with these presets (CMake 3.21+):
+## Documentation
 
-```sh
-export PATH="$PWD/.tools/cmake-venv/bin:$PATH"
-cmake --preset local-llvm
-cmake --build --preset local-llvm --parallel
-ctest --preset local-llvm
-./build/local-llvm/order_book_demo
-```
-
-Substitute `local-llvm-sanitize` for all three preset names to build/test with
-ASan and UBSan. Separate build directories avoid mixing compiler caches.
-The macOS SDK still comes from Apple's Command Line Tools.
-The toolchain file pairs local Clang with Apple SDK C++ headers and the system
-C++ runtime. This keeps standard-library headers and runtime compatible for exception handling.
-When changing the toolchain of an existing local LLVM build, run
-`cmake --fresh --preset local-llvm` (and the sanitizer preset) once to clear the
-old linker settings. SDK discovery uses `xcrun`, so no SDK path is hard-coded.
-
-`std::is_same_v` needs `<type_traits>` and C++17 or newer. Apple Clang 17 already
-supports it; this project uses C++20. A missing-member editor diagnostic can mean
-the editor is parsing in an older language mode, even when the build succeeds.
-The checked-in VS Code C/C++ configuration selects the local compiler, C++20,
-and the generated `build/local-llvm/compile_commands.json`. `.clangd` points
-clangd-based editors at that same compilation database. Open the repository root,
-configure the preset, and reload the editor's language service if errors persist.
-Direct compiler commands must also include `-std=c++20` and `-Iinclude`.
-
-The compiler binaries are local artifacts, so a fresh clone must install them
-before using the presets. To reproduce this installation, download
-`LLVM-23.1.5-macOS-ARM64.tar.xz` from the
-[official release](https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.5),
-verify SHA-256
-`aba592b4a15e8f90c634c5367b51ec8418b8bcd2829865db331a17dc9418dcff`,
-and extract into `.tools/llvm/` with one leading archive directory stripped.
-The ordinary Apple Clang build instructions above remain an alternative.
-
-Read [the engine contract](docs/contract.md) for types, error precedence, event
-ordering, limits, and worked matching/replacement examples. Code comments should
-explain overall logic, invariants, ownership, and non-obvious choices; avoid
-restating every line. Update comments when behavior changes.
+- [Build and run instructions](docs/instructions.md)
+- [Engine contract](docs/contract.md)
