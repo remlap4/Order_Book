@@ -28,9 +28,9 @@ Implemented:
 - FIFO storage within ordered price levels
 - Order-ID lookup, best bid/ask, and depth snapshots
 
-Tests cover matching at one price level on both sides, FIFO priority, aggregate
-quantities, rejection behavior, and storage lifetime. Multi-level sweep and
-residual-resting edge cases still need dedicated verification.
+Tests cover matching and multi-level sweeps on both sides, exact trade ordering,
+limit-price stopping, full-fill cleanup, residual resting and FIFO priority,
+quantity conservation, rejection behavior, and storage lifetime.
 
 Cancellation, replacement, replay, and benchmarking are not yet implemented.
 No performance results are claimed yet.

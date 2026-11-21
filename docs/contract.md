@@ -6,8 +6,8 @@ queries are implemented. All Cancel/Replace commands
 currently throw `std::logic_error` without changing orders or consuming sequence
 numbers. This is a temporary development guard, not a venue rejection policy.
 Cancellation/replacement examples below describe future behavior. Matching tests
-cover FIFO and partial/full fills at one price level on both sides; multi-level
-sweep and residual-resting edge cases still need dedicated verification.
+cover FIFO and partial/full fills on both sides, multi-level sweeps, limit-price
+stopping, exhausted-level cleanup, and residual quantity and FIFO placement.
 
 Storage uses ascending price maps (bids traversed in reverse), FIFO lists per
 level, and an unordered ID index holding side, price, and stable list iterators.

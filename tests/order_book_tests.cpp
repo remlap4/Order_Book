@@ -157,6 +157,101 @@ void symmetric_matching() {
     }
 }
 
+void multi_level_sweeps() {
+    // Mirrored prices exercise ascending asks and descending bids. Arrival order
+    // deliberately differs from price order, and IDs differ from FIFO order.
+    for (const auto maker_side : {Side::buy, Side::sell}) {
+        const auto taker_side = maker_side == Side::buy ? Side::sell : Side::buy;
+        const Price direction = maker_side == Side::sell ? 1 : -1;
+        const auto price = [direction](Price step) { return 100 + direction * step; };
+        for (const bool beyond_limit : {false, true}) {
+            for (const Quantity quantity : {8ULL, 14ULL, 17ULL}) {
+                OrderBook book;
+                Sequence sequence = 1;
+                accepted(book, {40, maker_side, price(2), 5}, sequence++);
+                accepted(book, {90, maker_side, price(0), 2}, sequence++);
+                if (beyond_limit) {
+                    accepted(book, {60, maker_side, price(3), 6}, sequence++);
+                }
+                accepted(book, {20, maker_side, price(1), 4}, sequence++);
+                accepted(book, {10, maker_side, price(0), 3}, sequence++);
+
+                const auto events = book.process(Add{30, taker_side, price(2), quantity});
+                const bool partial = quantity == 8;
+                require(events.size() == (partial ? 4U : 5U), "sweep event count");
+                const auto* ack = std::get_if<Accepted>(&events[0].payload);
+                require(events[0].sequence == sequence++ && ack
+                        && ack->kind == CommandKind::add && ack->id == 30,
+                        "sweep acknowledgement precedes trades");
+                check_trade(events[1], sequence++, 90, 30, price(0), 2);
+                check_trade(events[2], sequence++, 10, 30, price(0), 3);
+                check_trade(events[3], sequence++, 20, 30, price(1), partial ? 3 : 4);
+                if (!partial) check_trade(events[4], sequence++, 40, 30, price(2), 5);
+
+                // Assert the entire public state, including removed levels and
+                // untouched liquidity beyond the limit. Both sides conserve size.
+                const Quantity residual = quantity > 14 ? quantity - 14 : 0;
+                const auto snapshot = book.depth(100);
+                const auto& makers = maker_side == Side::buy ? snapshot.bids : snapshot.asks;
+                const auto& takers = taker_side == Side::buy ? snapshot.bids : snapshot.asks;
+                require(makers.size() == (partial ? 2U : 0U) + (beyond_limit ? 1U : 0U),
+                        "sweep removes exhausted levels only");
+                if (partial) {
+                    check_level(makers[0], price(1), 1, 1);
+                    check_level(makers[1], price(2), 5, 1);
+                }
+                if (beyond_limit) check_level(makers.back(), price(3), 6, 1);
+                require(takers.size() == (residual ? 1U : 0U), "sweep residual level count");
+                if (residual) check_level(takers[0], price(2), residual, 1);
+                require(book.live_order_count() == makers.size() + takers.size(),
+                        "sweep ID index count");
+                const auto best_maker = maker_side == Side::buy ? book.best_bid() : book.best_ask();
+                const auto best_taker = taker_side == Side::buy ? book.best_bid() : book.best_ask();
+                require(best_maker.has_value() == !makers.empty()
+                        && best_taker.has_value() == !takers.empty(), "sweep empty best prices");
+                if (best_maker) check_level(*best_maker, makers[0].price,
+                                           makers[0].total_quantity, makers[0].order_count);
+                if (best_taker) check_level(*best_taker, price(2), residual, 1);
+                Quantity traded = 0;
+                for (std::size_t i = 1; i < events.size(); ++i) {
+                    traded += std::get<Trade>(events[i].payload).quantity;
+                }
+                Quantity resting = 0;
+                for (const auto& level : makers) resting += level.total_quantity;
+                require(traded + residual == quantity
+                        && traded + resting == 14 + (beyond_limit ? 6U : 0U),
+                        "sweep quantity conservation");
+
+                if (residual) {
+                    // A crossing residual creates its own level: earlier orders
+                    // at that price would already have crossed the makers. A later
+                    // arrival must queue behind it, verified through actual fills.
+                    accepted(book, {5, taker_side, price(2), 2}, sequence++);
+                    const auto followup = book.process(Add{70, maker_side, price(2), 4});
+                    require(followup.size() == 3, "residual FIFO event count");
+                    const auto* followup_ack = std::get_if<Accepted>(&followup[0].payload);
+                    require(followup[0].sequence == sequence++ && followup_ack
+                            && followup_ack->kind == CommandKind::add && followup_ack->id == 70,
+                            "residual FIFO acknowledgement");
+                    check_trade(followup[1], sequence++, 30, 70, price(2), 3);
+                    check_trade(followup[2], sequence++, 5, 70, price(2), 1);
+                    check_level((taker_side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                                price(2), 1, 1);
+                    require(book.live_order_count() == (beyond_limit ? 2U : 1U),
+                            "residual full-fill index cleanup");
+                }
+                // Filled maker and taker IDs must be reusable, even after several
+                // level deletions. A passive price avoids changing the other side.
+                accepted(book, {90, taker_side, price(-2), 1}, sequence++);
+                accepted(book, {30, taker_side, price(-2), 1}, sequence++);
+                check_level((taker_side == Side::buy ? book.depth(100).bids
+                                                   : book.depth(100).asks).back(),
+                            price(-2), 2, 2);
+            }
+        }
+    }
+}
+
 void fifo_and_handles() {
     // Inspect internal storage because aggregate public queries intentionally hide
     // individual IDs. Trade tests independently verify execution FIFO.
@@ -197,6 +292,7 @@ int main() {
         invalid_adds();
         unsupported_operations();
         symmetric_matching();
+        multi_level_sweeps();
         fifo_and_handles();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
