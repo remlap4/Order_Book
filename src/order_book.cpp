@@ -23,11 +23,9 @@ OrderBook::OrderBook() : impl_(std::make_unique<Impl>()) {}
 OrderBook::~OrderBook() = default;
 
 std::vector<Event> OrderBook::process(const Command& command) {
-    // Until these operations are implemented, fail explicitly rather
-    // than emit a misleading business rejection or silently leave a crossed book.
-    const auto* add = std::get_if<Add>(&command);
-    if (!add) {
-        throw std::logic_error("Cancel and Replace are not implemented yet");
+    // Unsupported replacement must not consume sequence space or mutate orders.
+    if (std::holds_alternative<Replace>(command)) {
+        throw std::logic_error("Replace is not implemented yet");
     }
 
     // Reserve sequence space conservatively for matching (ack + all makers).
@@ -38,6 +36,33 @@ std::vector<Event> OrderBook::process(const Command& command) {
     }
     auto& storage = impl_->storage;
     auto error = validate_fields(command);
+    if (const auto* cancel = std::get_if<Cancel>(&command)) {
+        const auto found = storage.by_id.find(cancel->id);
+        if (!error && found == storage.by_id.end()) error = RejectReason::unknown_id;
+        if (error) {
+            std::vector<Event> events{{impl_->next_sequence,
+                Rejected{CommandKind::cancel, cancel->id, *error}}};
+            ++impl_->next_sequence;
+            return events;
+        }
+
+        // Allocate the sole event before mutation. Copy the handle so the index
+        // can be erased before its owned list node; other FIFO positions survive.
+        std::vector<Event> events{{impl_->next_sequence,
+            Accepted{CommandKind::cancel, cancel->id}}};
+        const auto handle = found->second;
+        auto& levels = handle.side == Side::buy ? storage.bids : storage.asks;
+        const auto level_it = levels.find(handle.price);
+        auto& level = level_it->second;
+        level.total_quantity -= handle.order->quantity;
+        storage.by_id.erase(found);
+        level.orders.erase(handle.order);
+        if (level.orders.empty()) levels.erase(level_it);
+        ++impl_->next_sequence;
+        return events;
+    }
+
+    const auto* add = std::get_if<Add>(&command);
     if (!error && storage.by_id.contains(add->id)) {
         error = RejectReason::duplicate_id;
     }

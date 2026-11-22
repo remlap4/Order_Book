@@ -26,13 +26,15 @@ Implemented:
 - Input validation and duplicate-order rejection
 - Buy/sell matching with maker-price execution and partial fills
 - FIFO storage within ordered price levels
+- Cancellation by ID with remaining-quantity and empty-level cleanup
 - Order-ID lookup, best bid/ask, and depth snapshots
 
 Tests cover matching and multi-level sweeps on both sides, exact trade ordering,
 limit-price stopping, full-fill cleanup, residual resting and FIFO priority,
-quantity conservation, rejection behavior, and storage lifetime.
+quantity conservation, cancellation at every queue position, empty-book queries,
+rejection behavior, and storage lifetime.
 
-Cancellation, replacement, replay, and benchmarking are not yet implemented.
+Replacement, replay, and benchmarking are not yet implemented.
 No performance results are claimed yet.
 
 ## Design

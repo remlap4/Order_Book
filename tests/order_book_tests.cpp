@@ -85,7 +85,7 @@ void unsupported_operations() {
     accepted(book, {1, Side::buy, 100, 2}, 1);
     accepted(book, {2, Side::sell, 102, 3}, 2);
     for (const Command& command : std::vector<Command>{
-             Cancel{1}, Replace{1, 99, 1}}) {
+             Replace{1, 99, 1}}) {
         bool threw = false;
         try { (void)book.process(command); }
         catch (const std::logic_error&) { threw = true; }
@@ -103,6 +103,90 @@ void check_trade(const Event& event, Sequence sequence, OrderId maker,
     require(event.sequence == sequence && trade && trade->maker_id == maker
             && trade->taker_id == taker && trade->price == price
             && trade->quantity == quantity, "trade sequence/payload");
+}
+
+void cancel_event(OrderBook& book, OrderId id, Sequence sequence,
+                  std::optional<RejectReason> reason = std::nullopt) {
+    const auto events = book.process(Cancel{id});
+    require(events.size() == 1 && events[0].sequence == sequence, "cancel event count/sequence");
+    if (reason) {
+        const auto* error = std::get_if<Rejected>(&events[0].payload);
+        require(error && error->kind == CommandKind::cancel && error->id == id
+                && error->reason == *reason, "cancel rejection payload");
+    } else {
+        const auto* ack = std::get_if<Accepted>(&events[0].payload);
+        require(ack && ack->kind == CommandKind::cancel && ack->id == id,
+                "cancel acknowledgement payload");
+    }
+}
+
+void cancellation() {
+    for (const auto side : {Side::buy, Side::sell}) {
+        const auto opposite = side == Side::buy ? Side::sell : Side::buy;
+        // Remove each queue position independently, then execute survivors to
+        // verify cancellation preserves their FIFO priority and index handles.
+        for (const OrderId removed : {90ULL, 10ULL, 50ULL}) {
+            OrderBook book;
+            accepted(book, {90, side, 100, 2}, 1);
+            accepted(book, {10, side, 100, 3}, 2);
+            accepted(book, {50, side, 100, 4}, 3);
+            const auto saved = book.depth(1);
+            cancel_event(book, 0, 4, RejectReason::invalid_id);
+            cancel_event(book, 999, 5, RejectReason::unknown_id);
+            check_level((side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        100, 9, 3);
+            cancel_event(book, removed, 6);
+            cancel_event(book, removed, 7, RejectReason::unknown_id);
+            const Quantity canceled = removed == 90 ? 2 : (removed == 10 ? 3 : 4);
+            check_level((side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        100, 9 - canceled, 2);
+            require(book.live_order_count() == 2, "cancel updates live count");
+            check_level((side == Side::buy ? saved.bids : saved.asks)[0], 100, 9, 3);
+            // Reusing a canceled ID appends it after the surviving orders.
+            accepted(book, {removed, side, 100, 1}, 8);
+            const auto fills = book.process(Add{70, opposite, 100, 10 - canceled});
+            require(fills.size() == 4 && fills[0].sequence == 9, "post-cancel fill count");
+            std::size_t index = 1;
+            Sequence sequence = 10;
+            for (const OrderId id : {90ULL, 10ULL, 50ULL}) {
+                if (id != removed) {
+                    check_trade(fills[index++], sequence++, id, 70, 100,
+                                id == 90 ? 2 : (id == 10 ? 3 : 4));
+                }
+            }
+            check_trade(fills[index], sequence, removed, 70, 100, 1);
+            require(!book.best_bid() && !book.best_ask() && book.live_order_count() == 0,
+                    "post-cancel fills empty book");
+        }
+
+        OrderBook book;
+        const Price worse = side == Side::buy ? 99 : 101;
+        const Price other = side == Side::buy ? 110 : 90;
+        accepted(book, {1, side, 100, 5}, 1);
+        accepted(book, {2, side, worse, 7}, 2);
+        accepted(book, {3, opposite, other, 8}, 3);
+        const auto partial = book.process(Add{4, opposite, 100, 2});
+        require(partial.size() == 2, "cancel setup partial fill");
+        check_trade(partial[1], 5, 1, 4, 100, 2);
+        cancel_event(book, 4, 6, RejectReason::unknown_id); // fully filled taker
+        cancel_event(book, 1, 7); // remove only the remaining three units
+        const auto snapshot = book.depth(1);
+        check_level((side == Side::buy ? snapshot.bids : snapshot.asks)[0], worse, 7, 1);
+        check_level((side == Side::buy ? snapshot.asks : snapshot.bids)[0], other, 8, 1);
+        require(book.live_order_count() == 2, "cancel removes empty best level");
+        cancel_event(book, 2, 8);
+        require(!(side == Side::buy ? book.best_bid() : book.best_ask()), "empty canceled side");
+        cancel_event(book, 3, 9);
+        require(!book.best_bid() && !book.best_ask() && book.live_order_count() == 0,
+                "last cancel empties book");
+        for (const std::size_t limit : {0U, 1U, 100U}) {
+            const auto empty = book.depth(limit);
+            require(empty.bids.empty() && empty.asks.empty(), "empty depth after cancel");
+        }
+        cancel_event(book, 3, 10, RejectReason::unknown_id);
+        cancel_event(book, 0, 11, RejectReason::invalid_id);
+        accepted(book, {1, side, 100, 1}, 12); // queries consumed no sequence
+    }
 }
 
 void symmetric_matching() {
@@ -291,6 +375,7 @@ int main() {
         add_and_query();
         invalid_adds();
         unsupported_operations();
+        cancellation();
         symmetric_matching();
         multi_level_sweeps();
         fifo_and_handles();
