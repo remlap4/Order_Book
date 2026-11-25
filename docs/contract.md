@@ -101,6 +101,22 @@ Query results and event vectors own their data and survive subsequent commands.
 One thread owns the noncopyable, nonmovable book; calls are not synchronized.
 An implementation pointer keeps future container choices out of the public API.
 
+`validate_invariants()` is an explicit read-only diagnostic, returning normally
+for consistent storage and throwing `std::logic_error` on a detected violation.
+It checks strictly uncrossed best prices, nonempty levels, price/ID/quantity
+bounds, the live-order limit, exact aggregate quantities, and a one-to-one
+correspondence between owned orders and ID handles (including side, price, and
+list position). It consumes no event sequence numbers. The scan costs expected
+O(N + P) time with O(1) auxiliary space for N live orders and P price levels;
+it is not automatically run by `process()`.
+
+Engine tests call the checker at every command boundary, and storage tests
+deliberately break individual invariants to verify detection. Iterator lifetime
+and container integrity remain prerequisites for traversal and comparison;
+this is a logical consistency check, not recovery from arbitrary memory
+corruption. ASan/UBSan runs complement it with memory/undefined-behavior checks.
+FIFO arrival semantics are verified separately through exact trade sequences.
+
 ## Worked examples (specification, not executable replay syntax)
 
 Each example starts with an empty book and sequence 1. Abbreviated `A`, `T`, and

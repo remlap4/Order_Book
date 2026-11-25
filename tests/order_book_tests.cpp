@@ -12,15 +12,30 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+// Check every command boundary, including recoverable rejections and the
+// unsupported-operation guard. The production matching path pays no scan cost.
+std::vector<Event> checked_process(OrderBook& book, const Command& command) {
+    book.validate_invariants();
+    std::vector<Event> events;
+    try {
+        events = book.process(command);
+    } catch (const std::logic_error&) {
+        book.validate_invariants();
+        throw;
+    }
+    book.validate_invariants();
+    return events;
+}
+
 void accepted(OrderBook& book, Add add, Sequence sequence) {
-    const auto events = book.process(add);
+    const auto events = checked_process(book, add);
     require(events.size() == 1 && events[0].sequence == sequence, "ack sequence/count");
     const auto* ack = std::get_if<Accepted>(&events[0].payload);
     require(ack && ack->id == add.id && ack->kind == CommandKind::add, "ack payload");
 }
 
 void rejected(OrderBook& book, Add add, RejectReason reason, Sequence sequence) {
-    const auto events = book.process(add);
+    const auto events = checked_process(book, add);
     require(events.size() == 1 && events[0].sequence == sequence, "rejection sequence/count");
     const auto* error = std::get_if<Rejected>(&events[0].payload);
     require(error && error->id == add.id && error->kind == CommandKind::add
@@ -87,7 +102,7 @@ void unsupported_operations() {
     for (const Command& command : std::vector<Command>{
              Replace{1, 99, 1}}) {
         bool threw = false;
-        try { (void)book.process(command); }
+        try { (void)checked_process(book, command); }
         catch (const std::logic_error&) { threw = true; }
         require(threw, "unimplemented operation must fail explicitly");
         require(book.live_order_count() == 2, "unsupported command mutated count");
@@ -107,7 +122,7 @@ void check_trade(const Event& event, Sequence sequence, OrderId maker,
 
 void cancel_event(OrderBook& book, OrderId id, Sequence sequence,
                   std::optional<RejectReason> reason = std::nullopt) {
-    const auto events = book.process(Cancel{id});
+    const auto events = checked_process(book, Cancel{id});
     require(events.size() == 1 && events[0].sequence == sequence, "cancel event count/sequence");
     if (reason) {
         const auto* error = std::get_if<Rejected>(&events[0].payload);
@@ -144,7 +159,7 @@ void cancellation() {
             check_level((side == Side::buy ? saved.bids : saved.asks)[0], 100, 9, 3);
             // Reusing a canceled ID appends it after the surviving orders.
             accepted(book, {removed, side, 100, 1}, 8);
-            const auto fills = book.process(Add{70, opposite, 100, 10 - canceled});
+            const auto fills = checked_process(book, Add{70, opposite, 100, 10 - canceled});
             require(fills.size() == 4 && fills[0].sequence == 9, "post-cancel fill count");
             std::size_t index = 1;
             Sequence sequence = 10;
@@ -165,7 +180,7 @@ void cancellation() {
         accepted(book, {1, side, 100, 5}, 1);
         accepted(book, {2, side, worse, 7}, 2);
         accepted(book, {3, opposite, other, 8}, 3);
-        const auto partial = book.process(Add{4, opposite, 100, 2});
+        const auto partial = checked_process(book, Add{4, opposite, 100, 2});
         require(partial.size() == 2, "cancel setup partial fill");
         check_trade(partial[1], 5, 1, 4, 100, 2);
         cancel_event(book, 4, 6, RejectReason::unknown_id); // fully filled taker
@@ -203,7 +218,7 @@ void symmetric_matching() {
             // Rejected crossing commands must not fill or disturb priority.
             rejected(book, {90, taker_side, limit, 7}, RejectReason::duplicate_id, 3);
             rejected(book, {30, taker_side, limit, 0}, RejectReason::invalid_quantity, 4);
-            const auto first = book.process(Add{30, taker_side, limit, 2});
+            const auto first = checked_process(book, Add{30, taker_side, limit, 2});
             require(first.size() == 2 && first[0].sequence == 5, "partial fill events");
             const auto* ack = std::get_if<Accepted>(&first[0].payload);
             require(ack && ack->kind == CommandKind::add && ack->id == 30,
@@ -217,7 +232,7 @@ void symmetric_matching() {
 
             // Reusing the filled taker's ID is allowed. The partially filled
             // maker must still execute before the second arrival.
-            const auto second = book.process(Add{30, taker_side, limit, 5});
+            const auto second = checked_process(book, Add{30, taker_side, limit, 5});
             require(second.size() == 3 && second[0].sequence == 7, "FIFO event count");
             const auto* second_ack = std::get_if<Accepted>(&second[0].payload);
             require(second_ack && second_ack->id == 30
@@ -228,7 +243,7 @@ void symmetric_matching() {
                         100, 2, 1);
             require(book.live_order_count() == 1, "full maker removal");
             // Nine submitted maker units = seven traded + two remaining.
-            const auto final = book.process(Add{40, taker_side, limit, 2});
+            const auto final = checked_process(book, Add{40, taker_side, limit, 2});
             require(final.size() == 2 && final[0].sequence == 10, "exact fill events");
             check_trade(final[1], 11, 10, 40, 100, 2);
             require(!book.best_bid() && !book.best_ask() && book.live_order_count() == 0,
@@ -260,7 +275,7 @@ void multi_level_sweeps() {
                 accepted(book, {20, maker_side, price(1), 4}, sequence++);
                 accepted(book, {10, maker_side, price(0), 3}, sequence++);
 
-                const auto events = book.process(Add{30, taker_side, price(2), quantity});
+                const auto events = checked_process(book, Add{30, taker_side, price(2), quantity});
                 const bool partial = quantity == 8;
                 require(events.size() == (partial ? 4U : 5U), "sweep event count");
                 const auto* ack = std::get_if<Accepted>(&events[0].payload);
@@ -311,7 +326,7 @@ void multi_level_sweeps() {
                     // at that price would already have crossed the makers. A later
                     // arrival must queue behind it, verified through actual fills.
                     accepted(book, {5, taker_side, price(2), 2}, sequence++);
-                    const auto followup = book.process(Add{70, maker_side, price(2), 4});
+                    const auto followup = checked_process(book, Add{70, maker_side, price(2), 4});
                     require(followup.size() == 3, "residual FIFO event count");
                     const auto* followup_ack = std::get_if<Accepted>(&followup[0].payload);
                     require(followup[0].sequence == sequence++ && followup_ack
@@ -336,6 +351,44 @@ void multi_level_sweeps() {
     }
 }
 
+void invariant_diagnostics() {
+    detail::BookStorage empty;
+    empty.validate_invariants();
+    OrderBook empty_book;
+    empty_book.validate_invariants();
+
+    // Each fixture owns valid nodes throughout the test. Corrupt logical state
+    // independently so a different invariant cannot hide a missed defect.
+    const auto detects = [](const auto& corrupt) {
+        detail::BookStorage storage;
+        storage.insert({1, Side::buy, 99, 2});
+        storage.insert({2, Side::buy, 99, 3});
+        storage.insert({3, Side::sell, 101, 4});
+        storage.validate_invariants();
+        corrupt(storage);
+        bool threw = false;
+        try { storage.validate_invariants(); }
+        catch (const std::logic_error&) { threw = true; }
+        require(threw, "checker must detect inconsistent storage");
+    };
+    detects([](auto& s) { s.insert({4, Side::buy, 101, 1}); });
+    detects([](auto& s) { s.insert({4, Side::sell, 98, 1}); });
+    detects([](auto& s) { s.bids.try_emplace(98); });
+    detects([](auto& s) { s.insert({4, Side::buy, 0, 1}); });
+    detects([](auto& s) { s.insert({4, Side::sell, max_price + 1, 1}); });
+    detects([](auto& s) { s.bids.at(99).orders.front().quantity = 0; });
+    detects([](auto& s) { s.bids.at(99).orders.front().quantity = max_quantity + 1; });
+    detects([](auto& s) { s.bids.at(99).orders.front().id = 0; });
+    detects([](auto& s) { ++s.asks.at(101).total_quantity; });
+    detects([](auto& s) { s.by_id.erase(1); });
+    detects([](auto& s) { s.by_id.emplace(4, s.by_id.at(1)); });
+    detects([](auto& s) { s.by_id.at(1).side = Side::sell; });
+    detects([](auto& s) { s.by_id.at(1).side = static_cast<Side>(255); });
+    detects([](auto& s) { s.by_id.at(1).price = 98; });
+    detects([](auto& s) { s.by_id.at(1).order = s.by_id.at(2).order; });
+    detects([](auto& s) { s.bids.at(99).orders.back().id = 1; });
+}
+
 void fifo_and_handles() {
     // Inspect internal storage because aggregate public queries intentionally hide
     // individual IDs. Trade tests independently verify execution FIFO.
@@ -343,7 +396,7 @@ void fifo_and_handles() {
     for (const auto side : {Side::buy, Side::sell}) {
         const OrderId offset = side == Side::buy ? 0 : 100;
         for (const OrderId id : {9ULL, 2ULL, 7ULL}) {
-            storage.insert({id + offset, side, 100, id});
+            storage.insert({id + offset, side, side == Side::buy ? 100 : 4000, id});
         }
     }
     const auto saved = storage.by_id.at(9).order;
@@ -352,10 +405,11 @@ void fifo_and_handles() {
     }
     // Force hash rehash and verify handles still point to the owned list nodes.
     storage.by_id.rehash(storage.by_id.bucket_count() * 2);
+    storage.validate_invariants();
     require(saved->id == 9 && saved->quantity == 9, "handle lifetime");
     for (const auto side : {Side::buy, Side::sell}) {
         const OrderId offset = side == Side::buy ? 0 : 100;
-        const auto& level = (side == Side::buy ? storage.bids : storage.asks).at(100);
+        const auto& level = (side == Side::buy ? storage.bids : storage.asks).at(side == Side::buy ? 100 : 4000);
         std::vector<OrderId> ids;
         for (const auto& order : level.orders) ids.push_back(order.id);
         require(ids == std::vector<OrderId>{9 + offset, 2 + offset, 7 + offset},
@@ -379,6 +433,7 @@ int main() {
         symmetric_matching();
         multi_level_sweeps();
         fifo_and_handles();
+        invariant_diagnostics();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

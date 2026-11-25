@@ -145,4 +145,8 @@ std::size_t OrderBook::live_order_count() const noexcept {
     return impl_->storage.by_id.size();
 }
 
+void OrderBook::validate_invariants() const {
+    impl_->storage.validate_invariants();
+}
+
 } // namespace order_book

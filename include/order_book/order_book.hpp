@@ -28,6 +28,10 @@ public:
     [[nodiscard]] DepthSnapshot depth(std::size_t levels_per_side) const;
     [[nodiscard]] std::size_t live_order_count() const noexcept;
 
+    // Explicit diagnostic scan: throws std::logic_error on inconsistent storage.
+    // Read-only, expected O(live orders + levels); not part of the matching path.
+    void validate_invariants() const;
+
 private:
     // Hide container choices so baseline and optimized storage share one API.
     struct Impl;
