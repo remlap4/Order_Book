@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <limits>
 #include <variant>
 #include <vector>
 
@@ -18,6 +19,10 @@ using Sequence = std::uint64_t;
 inline constexpr Price max_price = 1'000'000'000'000;
 inline constexpr Quantity max_quantity = 1'000'000'000'000;
 inline constexpr std::size_t max_live_orders = 1'000'000;
+// Keep the aggregate and sequence reservation proofs valid if limits change.
+static_assert(max_live_orders > 0);
+static_assert(max_quantity <= std::numeric_limits<Quantity>::max() / max_live_orders);
+static_assert(max_live_orders < std::numeric_limits<Sequence>::max());
 
 enum class Side : std::uint8_t { buy, sell };
 enum class CommandKind : std::uint8_t { add, cancel, replace };

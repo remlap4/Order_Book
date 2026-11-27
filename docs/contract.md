@@ -66,7 +66,10 @@ engine requires room for `max_live_orders + 1` events (one acknowledgement
 plus at most one fill per resting order). If insufficient sequence space remains,
 throw `std::overflow_error` before mutation instead of wrapping; no event is
 emitted. This conservative check also applies to invalid commands. A new book
-starts a new sequence; queries consume none.
+starts a new sequence; queries consume none. Precisely, a command may start when
+`next_sequence <= UINT64_MAX - (max_live_orders + 1)`; the final sequence value
+is left unused so incrementing the counter remains safe. Exhaustion tests seed
+this counter through an internal fixture; the public API cannot reset it.
 
 Allocation failures propagate as `std::bad_alloc`, not business rejections. The
 baseline does not promise rollback after allocation failure: stop the run and
@@ -111,7 +114,14 @@ list position). It consumes no event sequence numbers. The scan costs expected
 O(N + P) time with O(1) auxiliary space for N live orders and P price levels;
 it is not automatically run by `process()`.
 
-Engine tests call the checker at every command boundary, and storage tests
+Boundary tests exercise the actual million-order capacity and 10^18 aggregate,
+including duplicate/field precedence, rejection before crossing, replacement at
+capacity, and admission after freeing a slot. Extreme integer inputs and ID reuse
+are tested through the engine, with subsequent trades verifying FIFO preservation.
+Compile-time checks keep the count/quantity aggregate bound representable.
+
+Engine tests call the checker at command boundaries (once after bulk capacity
+setup to avoid a quadratic scan), and storage tests
 deliberately break individual invariants to verify detection. Iterator lifetime
 and container integrity remain prerequisites for traversal and comparison;
 this is a logical consistency check, not recovery from arbitrary memory

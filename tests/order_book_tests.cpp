@@ -1,9 +1,18 @@
 #include "order_book/order_book.hpp"
 #include "book_storage.hpp"
+#include "order_book_impl.hpp"
+
+#include <limits>
 
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+
+namespace order_book::detail {
+struct OrderBookTestAccess {
+    static Sequence& sequence(OrderBook& book) { return book.impl_->next_sequence; }
+};
+} // namespace order_book::detail
 
 using namespace order_book;
 
@@ -444,6 +453,124 @@ void multi_level_sweeps() {
     }
 }
 
+void numeric_boundaries() {
+    const auto largest_id = std::numeric_limits<OrderId>::max();
+    for (const auto side : {Side::buy, Side::sell}) {
+        OrderBook book;
+        const auto opposite = side == Side::buy ? Side::sell : Side::buy;
+        const Price price = side == Side::buy ? 1 : max_price;
+        accepted(book, {largest_id, side, price, max_quantity}, 1);
+        accepted(book, {1, side, price, 1}, 2);
+        Sequence sequence = 3;
+        const auto reject = [&](const Command& command, RejectReason reason) {
+            const auto events = checked_process(book, command);
+            const auto* error = std::get_if<Rejected>(&events.at(0).payload);
+            require(events.size() == 1 && events[0].sequence == sequence++
+                    && error && error->reason == reason, "boundary rejection");
+            require(book.live_order_count() == 2, "boundary rejection count");
+            check_level((side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        price, max_quantity + 1, 2);
+        };
+        for (const Price bad : {std::numeric_limits<Price>::min(), Price{-1}, Price{0},
+                               max_price + 1, std::numeric_limits<Price>::max()}) {
+            reject(Add{largest_id, opposite, bad, 1}, RejectReason::invalid_price);
+            reject(Replace{largest_id, bad, 1}, RejectReason::invalid_price);
+        }
+        for (const Quantity bad : {Quantity{0}, max_quantity + 1,
+                                   std::numeric_limits<Quantity>::max()}) {
+            reject(Add{largest_id, opposite, price, bad}, RejectReason::invalid_quantity);
+            reject(Replace{largest_id, price, bad}, RejectReason::invalid_quantity);
+        }
+        reject(Add{0, static_cast<Side>(255), 0, 0}, RejectReason::invalid_id);
+        reject(Add{largest_id, static_cast<Side>(255), 0, 0}, RejectReason::invalid_side);
+        reject(Add{largest_id, opposite, price, 1}, RejectReason::duplicate_id);
+        reject(Cancel{0}, RejectReason::invalid_id);
+        reject(Cancel{2}, RejectReason::unknown_id);
+        reject(Replace{0, 0, 0}, RejectReason::invalid_id);
+        reject(Replace{2, 0, 0}, RejectReason::invalid_price);
+        reject(Replace{2, price, 0}, RejectReason::invalid_quantity);
+        reject(Replace{2, price, 1}, RejectReason::unknown_id);
+        const auto fills = checked_process(book, Add{2, opposite, price, max_quantity});
+        require(fills.size() == 2, "rejections preserve FIFO");
+        check_trade(fills[1], sequence + 1, largest_id, 2, price, max_quantity);
+        sequence += 2;
+        // Both a fully filled maker and a fully filled taker release their IDs.
+        accepted(book, {largest_id, side, price, 1}, sequence++);
+        accepted(book, {2, side, price, 1}, sequence++);
+        const auto reuse = checked_process(book, Add{3, opposite, price, 3});
+        require(reuse.size() == 4, "reused IDs append behind survivors");
+        check_trade(reuse[1], sequence + 1, 1, 3, price, 1);
+        check_trade(reuse[2], sequence + 2, largest_id, 3, price, 1);
+        check_trade(reuse[3], sequence + 3, 2, 3, price, 1);
+    }
+}
+
+void capacity_boundary() {
+    OrderBook book;
+    // Exercise the real production limit. Scan once after bulk setup to avoid
+    // quadratic invariant-check cost; every boundary command still gets a scan.
+    for (OrderId id = 1; id <= max_live_orders; ++id) {
+        const auto events = book.process(Add{id, Side::buy, 1, max_quantity});
+        require(events.size() == 1 && events[0].sequence == id
+                && std::holds_alternative<Accepted>(events[0].payload), "capacity setup");
+    }
+    book.validate_invariants();
+    check_level(book.best_bid().value(), 1, max_quantity * max_live_orders, max_live_orders);
+    Sequence sequence = max_live_orders + 1;
+    rejected(book, {1, Side::sell, 1, 1}, RejectReason::duplicate_id, sequence++);
+    rejected(book, {max_live_orders + 1, Side::buy, 1, 0},
+             RejectReason::invalid_quantity, sequence++);
+    for (const auto side : {Side::buy, Side::sell}) {
+        rejected(book, {max_live_orders + 1, side, 1, max_quantity},
+                 RejectReason::capacity_exceeded, sequence++);
+    }
+    check_level(book.best_bid().value(), 1, max_quantity * max_live_orders, max_live_orders);
+    const auto replacement = checked_process(book, Replace{1, 1, max_quantity});
+    require(replacement.size() == 1 && replacement[0].sequence == sequence++
+            && std::holds_alternative<Accepted>(replacement[0].payload), "replace at capacity");
+    cancel_event(book, max_live_orders, sequence++);
+    // Freeing one slot allows a crossing add; FIFO now starts at ID 2 because
+    // the replacement moved ID 1 to the tail without overflowing the aggregate.
+    const auto fill = checked_process(book, Add{max_live_orders, Side::sell, 1, max_quantity});
+    require(fill.size() == 2, "add after freeing capacity");
+    check_trade(fill[1], sequence + 1, 2, max_live_orders, 1, max_quantity);
+    check_level(book.best_bid().value(), 1, max_quantity * (max_live_orders - 2), max_live_orders - 2);
+}
+
+void sequence_boundary() {
+    constexpr auto last_start = std::numeric_limits<Sequence>::max()
+                                - static_cast<Sequence>(max_live_orders) - 1;
+    for (const Command command : std::vector<Command>{
+             Add{3, Side::sell, 100, 2}, Cancel{1}, Replace{1, 99, 1}, Cancel{0}}) {
+        OrderBook book;
+        accepted(book, {1, Side::buy, 100, 1}, 1);
+        accepted(book, {2, Side::buy, 100, 1}, 2);
+        auto& counter = detail::OrderBookTestAccess::sequence(book);
+        for (const Sequence exhausted : {last_start + 1, std::numeric_limits<Sequence>::max()}) {
+            counter = exhausted;
+            bool threw = false;
+            try { (void)book.process(command); }
+            catch (const std::overflow_error&) { threw = true; }
+            require(threw && counter == exhausted, "sequence overflow preserves counter");
+            book.validate_invariants();
+            check_level(book.best_bid().value(), 100, 2, 2);
+            require(!book.best_ask() && book.live_order_count() == 2, "overflow preserves state");
+        }
+        counter = last_start;
+        const auto fills = checked_process(book, Add{3, Side::sell, 100, 2});
+        require(fills.size() == 3 && fills[0].sequence == last_start,
+                "last allowed sequence start");
+        check_trade(fills[1], last_start + 1, 1, 3, 100, 1);
+        check_trade(fills[2], last_start + 2, 2, 3, 100, 1);
+        require(counter == last_start + 3, "sequence increments without wrapping");
+        bool threw = false;
+        try { (void)book.process(Cancel{0}); }
+        catch (const std::overflow_error&) { threw = true; }
+        require(threw && counter == last_start + 3 && book.live_order_count() == 0,
+                "exhaustion takes precedence over invalid fields");
+    }
+}
+
 void invariant_diagnostics() {
     detail::BookStorage empty;
     empty.validate_invariants();
@@ -521,6 +648,9 @@ int main() {
     try {
         add_and_query();
         invalid_adds();
+        numeric_boundaries();
+        capacity_boundary();
+        sequence_boundary();
         replacement();
         cancellation();
         symmetric_matching();

@@ -1,5 +1,5 @@
 #include "order_book/order_book.hpp"
-#include "book_storage.hpp"
+#include "order_book_impl.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -7,11 +7,6 @@
 #include <stdexcept>
 
 namespace order_book {
-
-struct OrderBook::Impl {
-    detail::BookStorage storage;
-    Sequence next_sequence = 1;
-};
 
 namespace {
 Level summarize(Price price, const detail::PriceLevel& level) {

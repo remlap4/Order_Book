@@ -6,6 +6,8 @@
 
 namespace order_book {
 
+namespace detail { struct OrderBookTestAccess; }
+
 // Supports limit adds with price/FIFO matching, cancel/replace, and read-only queries.
 // One thread owns the book. There is no internal synchronization or reentrancy.
 class OrderBook {
@@ -33,6 +35,8 @@ public:
     void validate_invariants() const;
 
 private:
+    friend struct detail::OrderBookTestAccess;
+
     // Hide container choices so baseline and optimized storage share one API.
     struct Impl;
     std::unique_ptr<Impl> impl_;
