@@ -23,11 +23,6 @@ OrderBook::OrderBook() : impl_(std::make_unique<Impl>()) {}
 OrderBook::~OrderBook() = default;
 
 std::vector<Event> OrderBook::process(const Command& command) {
-    // Unsupported replacement must not consume sequence space or mutate orders.
-    if (std::holds_alternative<Replace>(command)) {
-        throw std::logic_error("Replace is not implemented yet");
-    }
-
     // Reserve sequence space conservatively for matching (ack + all makers).
     // Leaving the final value unused also keeps next_sequence increment safe.
     constexpr auto budget = static_cast<Sequence>(max_live_orders) + 1;
@@ -50,36 +45,46 @@ std::vector<Event> OrderBook::process(const Command& command) {
         // can be erased before its owned list node; other FIFO positions survive.
         std::vector<Event> events{{impl_->next_sequence,
             Accepted{CommandKind::cancel, cancel->id}}};
-        const auto handle = found->second;
-        auto& levels = handle.side == Side::buy ? storage.bids : storage.asks;
-        const auto level_it = levels.find(handle.price);
-        auto& level = level_it->second;
-        level.total_quantity -= handle.order->quantity;
-        storage.by_id.erase(found);
-        level.orders.erase(handle.order);
-        if (level.orders.empty()) levels.erase(level_it);
+        storage.erase(found);
         ++impl_->next_sequence;
         return events;
     }
 
-    const auto* add = std::get_if<Add>(&command);
-    if (!error && storage.by_id.contains(add->id)) {
-        error = RejectReason::duplicate_id;
+    // Normalize a validated replacement into an incoming limit order. Its old
+    // slot is reused, so capacity/duplicate checks apply only to new adds.
+    const auto* replacement = std::get_if<Replace>(&command);
+    const auto kind = replacement ? CommandKind::replace : CommandKind::add;
+    Add incoming{};
+    auto original = storage.by_id.end();
+    if (replacement) {
+        incoming.id = replacement->id;
+        original = storage.by_id.find(replacement->id);
+        if (!error && original == storage.by_id.end()) error = RejectReason::unknown_id;
+        if (!error) {
+            incoming = {replacement->id, original->second.side,
+                        replacement->price, replacement->quantity};
+        }
+    } else {
+        incoming = std::get<Add>(command);
+        if (!error && storage.by_id.contains(incoming.id)) error = RejectReason::duplicate_id;
+        if (!error && storage.by_id.size() >= max_live_orders) error = RejectReason::capacity_exceeded;
     }
-    if (!error && storage.by_id.size() >= max_live_orders) {
-        error = RejectReason::capacity_exceeded;
-    }
+    const auto* add = &incoming;
     if (error) {
         std::vector<Event> events{{impl_->next_sequence,
-            Rejected{CommandKind::add, add->id, *error}}};
+            Rejected{kind, add->id, *error}}};
         ++impl_->next_sequence;
         return events;
     }
 
     // Allocate the acknowledgement before mutation. Storage allocation failures
     // remain terminal for this book as documented; no rollback is promised.
-    std::vector<Event> events{{impl_->next_sequence, Accepted{CommandKind::add, add->id}}};
+    std::vector<Event> events{{impl_->next_sequence, Accepted{kind, add->id}}};
     ++impl_->next_sequence;
+    // All recoverable checks and acknowledgement allocation precede removal.
+    // Unconditional unlink/reinsert resets priority even for unchanged fields.
+    // Count and quantity bounds still cap aggregates at 10^18 after replacement.
+    if (replacement) storage.erase(original);
 
     // Both sides share the fill logic; only best-price selection and crossing
     // direction differ. The incoming order is not indexed until it rests.

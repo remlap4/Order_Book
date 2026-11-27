@@ -76,6 +76,19 @@ struct BookStorage {
         if (count != by_id.size()) throw std::logic_error("Order index count mismatch");
     }
 
+    // Remove the borrowed handle before destroying its owned node. Other list
+    // iterators remain valid, including orders sharing this price level.
+    void erase(std::unordered_map<OrderId, OrderHandle>::iterator found) {
+        const auto handle = found->second;
+        auto& levels = handle.side == Side::buy ? bids : asks;
+        const auto level_it = levels.find(handle.price);
+        auto& level = level_it->second;
+        level.total_quantity -= handle.order->quantity;
+        by_id.erase(found);
+        level.orders.erase(handle.order);
+        if (level.orders.empty()) levels.erase(level_it);
+    }
+
     // Only the engine calls this after validating fields, uniqueness and capacity.
     // Appending preserves arrival order even when IDs are not monotonically ordered.
     void insert(const Add& add) {

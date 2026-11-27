@@ -12,8 +12,8 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-// Check every command boundary, including recoverable rejections and the
-// unsupported-operation guard. The production matching path pays no scan cost.
+// Check every command boundary, including recoverable rejections.
+// The production matching path pays no scan cost.
 std::vector<Event> checked_process(OrderBook& book, const Command& command) {
     book.validate_invariants();
     std::vector<Event> events;
@@ -93,23 +93,6 @@ void invalid_adds() {
     check_level(book.best_bid().value(), 100, max_quantity, 1);
     accepted(book, {2, Side::buy, 100, max_quantity}, 8);
     check_level(book.best_bid().value(), 100, 2 * max_quantity, 2);
-}
-
-void unsupported_operations() {
-    OrderBook book;
-    accepted(book, {1, Side::buy, 100, 2}, 1);
-    accepted(book, {2, Side::sell, 102, 3}, 2);
-    for (const Command& command : std::vector<Command>{
-             Replace{1, 99, 1}}) {
-        bool threw = false;
-        try { (void)checked_process(book, command); }
-        catch (const std::logic_error&) { threw = true; }
-        require(threw, "unimplemented operation must fail explicitly");
-        require(book.live_order_count() == 2, "unsupported command mutated count");
-        check_level(book.best_bid().value(), 100, 2, 1);
-        check_level(book.best_ask().value(), 102, 3, 1);
-    }
-    accepted(book, {3, Side::buy, 101, 1}, 3); // guards consume no sequence or ID
 }
 
 void check_trade(const Event& event, Sequence sequence, OrderId maker,
@@ -201,6 +184,116 @@ void cancellation() {
         cancel_event(book, 3, 10, RejectReason::unknown_id);
         cancel_event(book, 0, 11, RejectReason::invalid_id);
         accepted(book, {1, side, 100, 1}, 12); // queries consumed no sequence
+    }
+}
+
+void replacement() {
+    const auto check_ack = [](const Event& event, Sequence sequence, OrderId id) {
+        const auto* ack = std::get_if<Accepted>(&event.payload);
+        require(event.sequence == sequence && ack && ack->kind == CommandKind::replace
+                && ack->id == id, "replace acknowledgement");
+    };
+    for (const auto side : {Side::buy, Side::sell}) {
+        const auto opposite = side == Side::buy ? Side::sell : Side::buy;
+        // Unchanged fields, reductions, and increases all move the head to tail.
+        for (const Quantity size : {5ULL, 2ULL, 8ULL}) {
+            OrderBook book;
+            accepted(book, {90, side, 100, 5}, 1);
+            accepted(book, {10, side, 100, 3}, 2);
+            const auto events = checked_process(book, Replace{90, 100, size});
+            require(events.size() == 1, "passive replace emits only acknowledgement");
+            check_ack(events[0], 3, 90);
+            check_level((side == Side::buy ? book.best_bid() : book.best_ask()).value(),
+                        100, size + 3, 2);
+            const auto fills = checked_process(book, Add{20, opposite, 100, size + 3});
+            require(fills.size() == 3, "replace priority fills");
+            check_trade(fills[1], 5, 10, 20, 100, 3);
+            check_trade(fills[2], 6, 90, 20, 100, size);
+            require(book.live_order_count() == 0, "replace full cleanup");
+        }
+        // A price change joins an existing queue and removes the old sole level.
+        {
+            OrderBook book;
+            const Price old = side == Side::buy ? 99 : 101;
+            accepted(book, {1, side, old, 7}, 1);
+            accepted(book, {2, side, 100, 3}, 2);
+            auto events = checked_process(book, Replace{1, 100, 2});
+            check_ack(events[0], 3, 1);
+            require(events.size() == 1 && book.live_order_count() == 2,
+                    "price change preserves count");
+            const auto depth = book.depth(10);
+            require((side == Side::buy ? depth.bids : depth.asks).size() == 1,
+                    "replace removes old level");
+            const auto fills = checked_process(book, Add{3, opposite, 100, 5});
+            require(fills.size() == 3, "price change FIFO fills");
+            check_trade(fills[1], 5, 2, 3, 100, 3);
+            check_trade(fills[2], 6, 1, 3, 100, 2);
+        }
+        // Replace the remaining size of a partially filled order. Sweep makers
+        // at their prices, exercising partial fill, exact fill, and new residual.
+        for (const Quantity size : {2ULL, 5ULL, 8ULL}) {
+            OrderBook book;
+            const Price first = side == Side::buy ? 102 : 98;
+            const Price limit = side == Side::buy ? 103 : 97;
+            accepted(book, {1, side, 100, 7}, 1);
+            const auto partial = checked_process(book, Add{9, opposite, 100, 2});
+            check_trade(partial[1], 3, 1, 9, 100, 2);
+            accepted(book, {90, opposite, first, 3}, 4);
+            accepted(book, {10, opposite, limit, 2}, 5);
+            const auto events = checked_process(book, Replace{1, limit, size});
+            check_ack(events[0], 6, 1);
+            require(events.size() == (size == 2 ? 2U : 3U), "crossing replace event count");
+            check_trade(events[1], 7, 90, 1, first, size == 2 ? 2 : 3);
+            if (size != 2) check_trade(events[2], 8, 10, 1, limit, 2);
+            const auto depth = book.depth(10);
+            const auto& own = side == Side::buy ? depth.bids : depth.asks;
+            const auto& other = side == Side::buy ? depth.asks : depth.bids;
+            require(own.size() == (size == 8 ? 1U : 0U)
+                    && other.size() == (size == 2 ? 2U : 0U), "crossing replace final levels");
+            if (size == 2) {
+                check_level(other[0], first, 1, 1);
+                check_level(other[1], limit, 2, 1);
+            }
+            if (size == 8) {
+                check_level(own[0], limit, 3, 1);
+                cancel_event(book, 1, 9); // retained ID handle points to the residual
+            } else {
+                cancel_event(book, 1, size == 2 ? 8 : 9, RejectReason::unknown_id);
+            }
+        }
+        {
+            OrderBook book;
+            accepted(book, {1, side, 100, 5}, 1);
+            accepted(book, {2, side, 100, 3}, 2);
+            const Price crossing = side == Side::buy ? 110 : 90;
+            accepted(book, {3, opposite, crossing, 4}, 3);
+            Sequence sequence = 4;
+            const auto reject = [&](Replace command, RejectReason reason) {
+                const auto events = checked_process(book, command);
+                require(events.size() == 1 && events[0].sequence == sequence++, "replace rejection sequence");
+                const auto* error = std::get_if<Rejected>(&events[0].payload);
+                require(error && error->kind == CommandKind::replace && error->id == command.id
+                        && error->reason == reason, "replace rejection payload");
+                const auto depth = book.depth(10);
+                require(depth.bids.size() == 1 && depth.asks.size() == 1
+                        && book.live_order_count() == 3, "rejected replace preserves levels/count");
+                check_level((side == Side::buy ? depth.bids : depth.asks)[0], 100, 8, 2);
+                check_level((side == Side::buy ? depth.asks : depth.bids)[0], crossing, 4, 1);
+            };
+            reject({0, 0, 0}, RejectReason::invalid_id);
+            reject({1, 0, 0}, RejectReason::invalid_price);
+            reject({1, max_price + 1, 1}, RejectReason::invalid_price);
+            reject({1, crossing, 0}, RejectReason::invalid_quantity);
+            reject({1, crossing, max_quantity + 1}, RejectReason::invalid_quantity);
+            reject({999, 0, 1}, RejectReason::invalid_price);
+            reject({999, crossing, 1}, RejectReason::unknown_id);
+            // Execution reveals individual remaining sizes and unchanged FIFO,
+            // which aggregate snapshots alone cannot prove.
+            const auto fills = checked_process(book, Add{4, opposite, 100, 8});
+            require(fills.size() == 3, "rejected replace preserves FIFO count");
+            check_trade(fills[1], sequence + 1, 1, 4, 100, 5);
+            check_trade(fills[2], sequence + 2, 2, 4, 100, 3);
+        }
     }
 }
 
@@ -428,7 +521,7 @@ int main() {
     try {
         add_and_query();
         invalid_adds();
-        unsupported_operations();
+        replacement();
         cancellation();
         symmetric_matching();
         multi_level_sweeps();

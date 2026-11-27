@@ -2,10 +2,9 @@
 
 This document specifies the target behavior. Limit adds with symmetric matching,
 partial fills, field/duplicate/capacity rejection, event sequencing, and read-only
-queries and cancellation are implemented. Replace commands
-currently throw `std::logic_error` without changing orders or consuming sequence
-numbers. This is a temporary development guard, not a venue rejection policy.
-Replacement examples below describe future behavior. Matching tests
+queries, cancellation, and replacement are implemented. Replacement tests cover
+unchanged/size-reduced priority reset, price changes, immediate matching, and
+rejected replacements preserving quantities and FIFO. Matching tests
 cover FIFO and partial/full fills on both sides, multi-level sweeps, limit-price
 stopping, exhausted-level cleanup, and residual quantity and FIFO placement.
 
@@ -20,6 +19,8 @@ amortized O(1) iterator-based level erasure, plus insertion for any remainder.
 Cancellation uses expected O(1) ID lookup, O(log P) price-level lookup, and
 O(1) FIFO unlink, followed by amortized O(1) empty-level erasure. It removes
 only the current remaining quantity and preserves all surviving FIFO positions.
+Replacement adds cancellation cost to the matching/insertion path, always
+unlinking the original before matching and appending any residual.
 Aggregate quantity cannot exceed 10^18 under the enforced count/quantity limits.
 Internal storage tests inspect list handles; execution tests verify FIFO through
 emitted trades, including a partially filled maker retaining its position.

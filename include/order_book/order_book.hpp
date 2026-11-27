@@ -6,7 +6,7 @@
 
 namespace order_book {
 
-// Supports limit adds with price/FIFO matching, cancellation, and read-only queries.
+// Supports limit adds with price/FIFO matching, cancel/replace, and read-only queries.
 // One thread owns the book. There is no internal synchronization or reentrancy.
 class OrderBook {
 public:
@@ -18,8 +18,8 @@ public:
     OrderBook& operator=(OrderBook&&) = delete;
 
     // Process synchronously and return owned events. Logical rejection preserves
-    // orders but advances the event sequence. Replace
-    // currently throws std::logic_error without mutation. See docs/contract.md.
+    // orders but advances the event sequence. Replace retains ID/side and always
+    // resets FIFO priority; it can immediately match. See docs/contract.md.
     [[nodiscard]] std::vector<Event> process(const Command& command);
 
     [[nodiscard]] std::optional<Level> best_bid() const;

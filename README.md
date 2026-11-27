@@ -27,16 +27,17 @@ Implemented:
 - Buy/sell matching with maker-price execution and partial fills
 - FIFO storage within ordered price levels
 - Cancellation by ID with remaining-quantity and empty-level cleanup
+- Replacement with prevalidation, priority reset, and immediate matching
 - Order-ID lookup, best bid/ask, and depth snapshots
 - Explicit read-only storage invariant validation
 
 Tests cover matching and multi-level sweeps on both sides, exact trade ordering,
 limit-price stopping, full-fill cleanup, residual resting and FIFO priority,
 quantity conservation, cancellation at every queue position, empty-book queries,
-rejection behavior, and storage lifetime. Engine tests check invariants at every
+replacement priority/crossing behavior, non-mutating rejections, and storage lifetime. Engine tests check invariants at every
 command boundary; deliberate storage inconsistencies test the checker itself.
 
-Replacement, replay, and benchmarking are not yet implemented.
+Replay and benchmarking are not yet implemented.
 No performance results are claimed yet.
 
 ## Design
